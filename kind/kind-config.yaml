@@ -1,0 +1,30 @@
+# =============================================================================
+# KIND cluster — "quicktask-gitops"
+# -----------------------------------------------------------------------------
+# Un solo nodo control-plane (suficiente para la demo). Se exponen puertos del
+# nodo hacia el host mediante extraPortMappings para poder alcanzar servicios
+# sin depender de un LoadBalancer:
+#
+#   host 8080  -> node 30080   (NodePort opcional para quicktask, si se expone)
+#   host 8081  -> node 30081   (NodePort opcional para la UI de Argo CD)
+#
+# En la ruta por defecto NO se usan NodePorts: se accede por `kubectl port-forward`
+# (ver README). Los mappings quedan listos por si prefieres exponer vía NodePort.
+# =============================================================================
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: quicktask-gitops
+nodes:
+  - role: control-plane
+    # Etiqueta útil para selectores/afinidad si se amplía la demo.
+    labels:
+      ingress-ready: "true"
+    extraPortMappings:
+      # quicktask (si se decide exponer por NodePort 30080)
+      - containerPort: 30080
+        hostPort: 8080
+        protocol: TCP
+      # Argo CD UI (si se decide exponer por NodePort 30081)
+      - containerPort: 30081
+        hostPort: 8081
+        protocol: TCP

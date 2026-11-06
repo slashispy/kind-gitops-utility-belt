@@ -1,0 +1,4 @@
+title: QuickTask GitOps Circuit
+description: Circuito GitOps reproducible en KIND con Argo CD, Helm chart genérico, App of Apps y ApplicationSet.
+theme: jekyll-theme-cayman
+lang: es
