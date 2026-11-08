@@ -19,7 +19,7 @@ verificados sobre el circuito real.
 2. [Crear el cluster KIND](#2-crear-el-cluster-kind)
 3. [Instalar Argo CD](#3-instalar-argo-cd)
 4. [Abrir la UI de Argo CD](#4-abrir-la-ui-de-argo-cd)
-5. [Construir y cargar la imagen](#5-construir-y-cargar-la-imagen)
+5. [Construir las imágenes y crear las claves JWT](#5-construir-las-imágenes-y-crear-las-claves-jwt)
 6. [Arrancar el circuito GitOps](#6-arrancar-el-circuito-gitops)
 7. [Ver cada recurso funcionando](#7-ver-cada-recurso-funcionando)
 8. [Probar la aplicación](#8-probar-la-aplicación)
@@ -34,14 +34,14 @@ verificados sobre el circuito real.
 
 | Herramienta | Para qué | Verificar |
 |---|---|---|
-| Docker | Corre los nodos KIND y construye la imagen | `docker info` |
+| Docker | Corre los nodos KIND y construye las imágenes | `docker info` |
 | kind | Cluster de Kubernetes local | `kind version` |
 | kubectl | Cliente de Kubernetes | `kubectl version --client` |
-| make, bash, curl, openssl | Orquestación y pruebas | `make --version` |
+| make, bash, curl, openssl, python3 | Orquestación, claves JWT y pruebas | `make --version` |
 
 **Docker debe estar corriendo** antes de empezar. No necesitas `helm` ni `go`
-instalados: Argo CD renderiza el chart dentro del cluster y la imagen se compila
-dentro de Docker.
+instalados: Argo CD renderiza el chart dentro del cluster y las imágenes (Go y
+Quarkus) se compilan dentro de Docker.
 
 ```bash
 docker info >/dev/null && echo "docker ok"
@@ -51,19 +51,21 @@ kubectl version --client
 
 ## 1. Clonar y preparar
 
-El circuito son 5 repos, pero **solo necesitas clonar dos** en tu máquina: este
-(el tooling) y `quicktask` (para construir la imagen). El resto lo lee Argo CD
-directamente desde GitHub.
+El circuito son 6 repos, pero **solo necesitas clonar tres** en tu máquina: este
+(el tooling), `quicktask` y `quicktask-auth` (para construir las imágenes). El
+resto lo lee Argo CD directamente desde GitHub.
 
 ```bash
-mkdir -p ~/Developer/go/proyectos && cd ~/Developer/go/proyectos
+mkdir -p ~/Developer/go/proyectos ~/Developer/java/proyectos
+cd ~/Developer/go/proyectos
 git clone https://github.com/slashispy/kind-gitops-utility-belt
 git clone https://github.com/slashispy/quicktask
+git clone https://github.com/slashispy/quicktask-auth ~/Developer/java/proyectos/quicktask-auth
 cd kind-gitops-utility-belt
 ```
 
-Si clonas `quicktask` en otra ruta, indícala cuando construyas la imagen:
-`QUICKTASK_DIR=/mi/ruta/quicktask make image`.
+Si clonas los repos en otras rutas, indícalas cuando construyas las imágenes:
+`QUICKTASK_DIR=/mi/ruta/quicktask QUICKTASK_AUTH_DIR=/mi/ruta/quicktask-auth make image`.
 
 Mira los targets disponibles:
 
@@ -157,26 +159,42 @@ ninguna aplicación.
 > ellos obtendrías `address already in use`. Por eso usamos 9090 (app) y 9091
 > (Argo CD).
 
-## 5. Construir y cargar la imagen
+## 5. Construir las imágenes y crear las claves JWT
 
 ```bash
 make image
+make keys
 ```
 
-**Qué hace:** `docker build -t quicktask:dev` sobre el repo de la app y
-`kind load docker-image quicktask:dev`, que copia la imagen **dentro del nodo**.
-No hay registry: el chart usa `pullPolicy: IfNotPresent` y el tag fijo `dev`.
-
-**Cómo verlo:**
+**`make image`** hace `docker build` de **dos imágenes** (`quicktask:dev`, Go, y
+`quicktask-auth:dev`, Quarkus) y las copia **dentro del nodo** con
+`kind load docker-image`. No hay registry: el chart usa `pullPolicy: IfNotPresent`
+y el tag fijo `dev`.
 
 ```bash
-docker images quicktask
 docker exec quicktask-gitops-control-plane crictl images | grep quicktask
-# docker.io/library/quicktask   dev   …   7.54MB
+# docker.io/library/quicktask        dev   …
+# docker.io/library/quicktask-auth   dev   …
 ```
 
-La segunda línea es la importante: confirma que la imagen está **dentro del
-nodo**. Si no aparece, el pod acabará en `ImagePullBackOff`.
+Si falta alguna, el pod acabará en `ImagePullBackOff`.
+
+**`make keys`** crea los datos sensibles del flujo de autenticación como
+**Secrets del cluster** (nunca van a Git):
+
+| Secret | Contenido | Quién lo usa |
+|---|---|---|
+| `quicktask-auth-keys` | `private.pem`, clave **privada** RSA | solo `quicktask-auth` (firma) |
+| `quicktask-jwt-public` | `public.pem`, clave **pública** | `quicktask` (valida) |
+| `quicktask-auth-demo-client` | `client-id`, `client-secret`, `secret-hash` (bcrypt) | `quicktask-auth` lee el hash; tú el secret |
+
+```bash
+kubectl -n quicktask get secret
+```
+
+Es idempotente: si los Secrets ya existen no los toca (`FORCE=1 make keys` los
+regenera). Debe ejecutarse **antes** de `make apps`; si no, los pods esperan en
+`ContainerCreating` hasta que los Secrets existan.
 
 ## 6. Arrancar el circuito GitOps
 
@@ -193,11 +211,19 @@ root (Application)
  ├─ AppProject  quicktask            ← projects/quicktask-project.yaml
  └─ ApplicationSet  quicktask-apps   ← apps/applicationset.yaml
         └─ lee gitops-app-values/apps/*/metadata.yaml
-            └─ Application  quicktask
-                 ├─ chart:  helm-chart-generic-app
-                 └─ values: gitops-app-values/apps/quicktask/values.yaml
-                      └─ Deployment · Service · ConfigMap · Secret · MongoDB
+            ├─ Application  quicktask
+            │    ├─ chart:  helm-chart-generic-app
+            │    └─ values: gitops-app-values/apps/quicktask/values.yaml
+            │         └─ Deployment · Service · ConfigMap · Secret · MongoDB
+            └─ Application  quicktask-auth
+                 ├─ chart:  helm-chart-generic-app          (el MISMO chart)
+                 └─ values: gitops-app-values/apps/quicktask-auth/values.yaml
+                      └─ Deployment · Service · ConfigMap
 ```
+
+Añadir `quicktask-auth` al circuito no tocó ni el ApplicationSet ni los
+manifiestos de Argo CD: bastó una carpeta `apps/quicktask-auth/` en
+`gitops-app-values`.
 
 **Cómo verlo, capa por capa:**
 
@@ -205,16 +231,18 @@ root (Application)
 # 1) Las Applications (en vivo)
 kubectl -n argocd get applications -w
 # NAME        SYNC STATUS   HEALTH STATUS
-# root        Synced        Healthy
-# quicktask   Synced        Healthy
+# root             Synced        Healthy
+# quicktask        Synced        Healthy
+# quicktask-auth   Synced        Healthy
 
 # 2) El proyecto y el ApplicationSet que creó root
 kubectl -n argocd get appproject,applicationset
 
 # 3) Los pods de la app
 kubectl -n quicktask get pods -w
-# quicktask-xxxxxxxxxx-xxxxx   1/1   Running
-# quicktask-mongodb-0          1/1   Running
+# quicktask-xxxxxxxxxx-xxxxx        1/1   Running
+# quicktask-auth-xxxxxxxxxx-xxxxx   1/1   Running
+# quicktask-mongodb-0               1/1   Running
 ```
 
 > **Es normal que `quicktask` se reinicie 1-3 veces al arrancar.** La app
@@ -230,7 +258,7 @@ kubectl -n quicktask get pods -w
 
 Con el port-forward del paso 4 abierto, refresca <https://localhost:9091>:
 
-- Aparecen las tarjetas **root** y **quicktask**, ambas `Healthy` y `Synced`.
+- Aparecen las tarjetas **root**, **quicktask** y **quicktask-auth**, todas `Healthy` y `Synced`.
 - Entra en **quicktask**: verás el grafo con Deployment → ReplicaSet → Pod,
   Service, ConfigMap, Secret, StatefulSet → Pod → PVC.
 - Cada nodo muestra su estado; haz clic para ver el manifiesto, el diff con Git
@@ -251,8 +279,11 @@ Resultado esperado:
 | `statefulset` | `quicktask-mongodb` | MongoDB 7.0 con 1 réplica. |
 | `service` | `mongodb` (headless) | DNS estable `mongodb.quicktask.svc.cluster.local`. |
 | `pvc` | `data-quicktask-mongodb-0` (1Gi) | Volumen persistente de Mongo. |
-| `configmap` | `quicktask-config` | `MONGO_DB_NAME`, `PORT`. |
-| `secret` | `quicktask-secret` | `MONGO_URI`, `JWT_SECRET` (valores de demo). |
+| `configmap` | `quicktask-config` | `MONGO_DB_NAME`, `PORT`, `JWT_PUBLIC_KEY_PATH`, `JWT_ISSUER`, `JWT_AUDIENCE`. |
+| `secret` | `quicktask-secret` | `MONGO_URI` (valor de demo). |
+| `deployment` | `quicktask-auth` | Emisor de JWT (Quarkus, 1 réplica, sin base de datos). |
+| `service` | `quicktask-auth` (ClusterIP :8080) | Acceso al emisor de JWT. |
+| `secret` (creados por `make keys`) | `quicktask-auth-keys`, `quicktask-jwt-public`, `quicktask-auth-demo-client` | Claves RSA y cliente demo; **no están en Git**. |
 
 Para ver cómo el chart inyectó la configuración en el contenedor:
 
@@ -297,18 +328,29 @@ curl -i -X POST http://localhost:9090/v1/users -d '{}'
 # HTTP/1.1 401 Unauthorized
 ```
 
-Para crear un usuario necesitas un JWT HS256 firmado con el `JWT_SECRET` del
-cluster y con el claim `user_id`. Este bloque lo genera con `openssl`, sin
-instalar nada:
+Para crear un usuario necesitas un JWT que emite **`quicktask-auth`** (Quarkus).
+Abre el túnel hacia el emisor (**en otra terminal**) y pide un token con el
+cliente de demo que creó `make keys`:
 
 ```bash
-SECRET="demo-not-a-real-secret-change-me"   # el JWT_SECRET de gitops-app-values
-b64() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
-H=$(printf '{"alg":"HS256","typ":"JWT"}' | b64)
-P=$(printf '{"user_id":"demo-user"}'     | b64)
-S=$(printf '%s.%s' "$H" "$P" | openssl dgst -binary -sha256 -hmac "$SECRET" | b64)
-TOKEN="$H.$P.$S"
+kubectl -n quicktask port-forward svc/quicktask-auth 9092:8080
+```
 
+```bash
+TOKEN=$(scripts/token.sh)
+
+# Qué lleva dentro (claims):
+echo "$TOKEN" | cut -d. -f2 | base64 -d 2>/dev/null; echo
+# {"iss":"http://quicktask-auth","aud":"quicktask","sub":"demo-service",
+#  "user_id":"demo-service","iat":…,"exp":…,"jti":"…"}
+```
+
+`scripts/token.sh` lee `client-id` y `client-secret` del Secret
+`quicktask-auth-demo-client` y hace `POST /v1/auth/token` con
+`grant_type=client_credentials`. El token está firmado con **RS256** y vive 15
+minutos. Ahora sí:
+
+```bash
 curl -i -X POST http://localhost:9090/v1/users \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
@@ -317,6 +359,30 @@ curl -i -X POST http://localhost:9090/v1/users \
 ```
 
 La contraseña debe tener entre 8 y 100 caracteres.
+
+**Qué pasa con tokens que no deberían funcionar** (todos devuelven `401`):
+
+```bash
+# Token adulterado (se cambia el último carácter de la firma)
+curl -s -o /dev/null -w '%{http_code}\n' -X POST http://localhost:9090/v1/users \
+  -H "Authorization: Bearer ${TOKEN%?}x" -d '{}'
+
+# Credenciales de cliente incorrectas en el emisor
+curl -s -w ' %{http_code}\n' -X POST http://localhost:9092/v1/auth/token \
+  -H 'Content-Type: application/json' \
+  -d '{"grant_type":"client_credentials","client_id":"demo","client_secret":"mal"}'
+# {"error":"invalid_client",…} 401
+```
+
+`quicktask` solo conoce la clave **pública**, así que aunque alguien lea su
+configuración no puede fabricar tokens válidos. Además fija el algoritmo en
+RS256, de modo que un token `HS256` o `alg=none` se rechaza.
+
+La clave pública también se publica para quien quiera validar tokens:
+
+```bash
+curl -s http://localhost:9092/.well-known/jwks.json
+```
 
 ### Comprobar que se guardó en MongoDB
 
@@ -397,7 +463,10 @@ volver a empezar: `make bootstrap`, que encadena `up → argocd → image → ap
 |---|---|---|
 | `metadata.annotations: Too long` al instalar Argo CD | `apply` cliente con un CRD enorme | Ya resuelto: el script usa `--server-side`. Si lo ejecutas a mano, añade `--server-side --force-conflicts`. |
 | `address already in use` en `port-forward` | 8080/8081 están reservados por KIND | Usa 9090 y 9091 como en este tutorial. |
-| Pod `quicktask` en `ImagePullBackOff` | La imagen no está en el nodo | `make image` y verifica con `crictl images`. |
+| Pod `quicktask` o `quicktask-auth` en `ImagePullBackOff` | La imagen no está en el nodo | `make image` y verifica con `crictl images`. |
+| Pods en `ContainerCreating` (`secret … not found`) | No se ejecutó `make keys` | `make keys`; los pods arrancan solos al existir los Secrets. |
+| `401` con un token recién emitido | Las claves cambiaron (`FORCE=1 make keys`) y los pods usan las anteriores | `kubectl -n quicktask rollout restart deploy quicktask quicktask-auth` y pide un token nuevo. |
+| `token.sh` falla con `Connection refused` | Falta el port-forward del emisor | `kubectl -n quicktask port-forward svc/quicktask-auth 9092:8080`. |
 | Pod `quicktask` reiniciando 1-3 veces | Arranca antes que Mongo (DNS del headless) | Es transitorio. Mira `logs --previous`. |
 | `quicktask` en `CrashLoopBackOff` persistente | Mongo no llega a `Ready` | `kubectl -n quicktask describe pod quicktask-mongodb-0` y revisa el PVC. |
 | Application `Unknown` / `ComparisonError` | Argo CD no alcanza el repo | `kubectl -n argocd describe application quicktask`; confirma que los repos son públicos y que `targetRevision` existe. |

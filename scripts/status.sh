@@ -30,6 +30,7 @@ kubectl -n "${APP_NAMESPACE}" get svc 2>/dev/null | sed 's/^/    /' || true
 
 cat <<EOF
 
+  Port-forward quicktask-auth: kubectl -n ${APP_NAMESPACE} port-forward svc/quicktask-auth 9092:8080
   Port-forward quicktask:  kubectl -n ${APP_NAMESPACE} port-forward svc/quicktask 9090:8080
   Port-forward Argo CD UI: kubectl -n ${ARGOCD_NAMESPACE} port-forward svc/argocd-server 9091:443
 EOF

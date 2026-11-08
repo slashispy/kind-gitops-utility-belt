@@ -6,8 +6,9 @@ title: QuickTask GitOps Circuit
 # QuickTask GitOps Circuit
 
 Un circuito **GitOps completo y reproducible en local**: una API en Go con
-MongoDB desplegada en Kubernetes (KIND) por **Argo CD**, usando un **Helm chart
-genérico reutilizable** y el patrón **App of Apps + ApplicationSet**.
+MongoDB y un emisor de JWT en Quarkus, desplegados en Kubernetes (KIND) por
+**Argo CD**, usando un **Helm chart genérico reutilizable** y el patrón
+**App of Apps + ApplicationSet**.
 
 Con `make bootstrap` pasas de una máquina con Docker a una aplicación corriendo,
 sincronizada desde Git y con auto-reparación.
@@ -30,39 +31,53 @@ sincronizada desde Git y con auto-reparación.
  │    │    └─ ApplicationSet ── lee ──▶ gitops-app-values          │
  │    │                                   apps/*/metadata.yaml     │
  │    │                 genera ▼                                   │
- │    │    Application  quicktask                                  │
- │    │      chart  = helm-chart-generic-app                       │
- │    │      values = gitops-app-values/apps/quicktask/values.yaml │
+ │    │    Application  quicktask  ·  Application  quicktask-auth  │
+ │    │      chart  = helm-chart-generic-app  (el mismo)           │
+ │    │      values = gitops-app-values/apps/<app>/values.yaml     │
  │    ▼                                                            │
  │  namespace quicktask                                            │
- │    ├─ Deployment quicktask   (probes /health y /ready)          │
- │    ├─ Service ClusterIP :8080                                   │
- │    ├─ ConfigMap  · Secret                                       │
+ │    ├─ quicktask       API Go · valida JWT con la clave PÚBLICA  │
+ │    ├─ quicktask-auth  Quarkus · emite JWT con la clave PRIVADA  │
+ │    ├─ ConfigMap · Secret (claves creadas por `make keys`)       │
  │    └─ StatefulSet MongoDB + Service headless + PVC              │
  └─────────────────────────────────────────────────────────────────┘
 ```
 
-## Los 5 repositorios
+### El flujo de autenticación
+
+```
+ cliente ── client_id + client_secret ──▶ quicktask-auth ──▶ JWT RS256
+ cliente ── Authorization: Bearer JWT ──▶ quicktask        (401 si no valida)
+```
+
+`quicktask-auth` firma con una clave privada que solo él conoce; `quicktask` valida
+con la pública, comprobando firma, algoritmo (RS256), expiración, emisor y
+audiencia. Las claves y el cliente de demo se crean con `make keys` como Secrets
+del cluster: **nunca están en Git**.
+
+## Los 6 repositorios
 
 Cada repo tiene una única responsabilidad (separación estricta de
 responsabilidades):
 
 | Repo | Responsabilidad |
 |---|---|
-| [`quicktask`](https://github.com/slashispy/quicktask) | **Aplicación.** API Go 1.25 con MongoDB, JWT, `/health` y `/ready`, tests unitarios y de integración (testcontainers) y CI en GitHub Actions. |
+| [`quicktask`](https://github.com/slashispy/quicktask) | **Aplicación.** API Go 1.25 con MongoDB, validación de JWT RS256, `/health` y `/ready`, tests unitarios y de integración (testcontainers) y CI en GitHub Actions. |
+| [`quicktask-auth`](https://github.com/slashispy/quicktask-auth) | **Emisor de JWT.** Microservicio Quarkus (Java 21): `client_credentials`, tokens RS256, JWKS y health checks. Sin base de datos; tests con `@QuarkusTest`. |
 | [`helm-chart-generic-app`](https://github.com/slashispy/helm-chart-generic-app) | **Chart genérico.** Despliega cualquier app stateless parametrizada por values; MongoDB opcional; `values.schema.json` valida el contrato. No conoce `quicktask`. |
 | [`gitops-app-values`](https://github.com/slashispy/gitops-app-values) | **Configuración por app.** `apps/<app>/{values.yaml,metadata.yaml}`. Añadir una app = añadir una carpeta. |
 | [`gitops-argocd-apps`](https://github.com/slashispy/gitops-argocd-apps) | **Orquestación Argo CD.** App of Apps, AppProject y ApplicationSet con git files generator. |
-| [`kind-gitops-utility-belt`](https://github.com/slashispy/kind-gitops-utility-belt) | **Bootstrap (este repo).** Cluster KIND, instalación de Argo CD, carga de imagen, Makefile y este sitio. |
+| [`kind-gitops-utility-belt`](https://github.com/slashispy/kind-gitops-utility-belt) | **Bootstrap (este repo).** Cluster KIND, instalación de Argo CD, carga de imágenes, claves JWT, Makefile y este sitio. |
 
 ## Cómo fluye un despliegue
 
 1. **`make up`**: crea el cluster KIND.
 2. **`make argocd`**: instala Argo CD con server-side apply.
-3. **`make image`**: construye `quicktask:dev` y lo carga en el nodo (`kind load`).
-4. **`make apps`**: aplica *un solo manifiesto*, la Application `root`.
-5. Desde ahí **Argo CD lo reconcilia todo desde Git**: proyecto, ApplicationSet,
-   Application y los recursos de Kubernetes.
+3. **`make image`**: construye `quicktask:dev` y `quicktask-auth:dev` y las carga en el nodo (`kind load`).
+4. **`make keys`**: genera el par RSA y el cliente de demo como Secrets del cluster.
+5. **`make apps`**: aplica *un solo manifiesto*, la Application `root`.
+6. Desde ahí **Argo CD lo reconcilia todo desde Git**: proyecto, ApplicationSet,
+   las Applications (`quicktask` y `quicktask-auth`) y los recursos de Kubernetes.
 
 Después de ese primer `kubectl apply`, el cluster no se toca a mano: si alguien
 cambia algo, el *self-heal* lo revierte; si cambia Git, Argo CD lo aplica.
@@ -84,8 +99,17 @@ cambia algo, el *self-heal* lo revierte; si cambia Git, Argo CD lo aplica.
   está en [`ci/pipeline.md`](https://github.com/slashispy/kind-gitops-utility-belt/blob/main/ci/pipeline.md).
 - **Readiness real.** `/ready` hace ping a MongoDB; `/health` solo indica que el
   proceso vive. Cada probe usa el endpoint adecuado.
-- **Sin secretos reales.** Los valores del Secret son de demostración y están
-  señalados como tales; en producción irían por External Secrets o SOPS.
+- **Una app nueva = una carpeta.** `quicktask-auth` entró al circuito añadiendo
+  `apps/quicktask-auth/` en `gitops-app-values`; el ApplicationSet la detectó sin
+  cambios. Lo único que se extendió en el chart fue `extraVolumes` y
+  `extraVolumeMounts` (genéricos) para montar las claves.
+- **RS256 en vez de un secreto compartido.** Quien valida no puede emitir tokens:
+  `quicktask` solo tiene la clave pública. El emisor usa *client credentials* y no
+  usuarios de Mongo, porque `POST /v1/users` ya está protegido por JWT y atar el
+  token a usuarios existentes crearía un ciclo.
+- **Secretos fuera de Git.** Claves y credenciales se crean con `make keys` y los
+  values solo las referencian por nombre. En producción irían por External
+  Secrets o SOPS.
 
 ## Qué demuestra este proyecto
 
@@ -95,6 +119,10 @@ cambia algo, el *self-heal* lo revierte; si cambia Git, Argo CD lo aplica.
 - Automatización reproducible: scripts idempotentes y Makefile.
 - Testing y CI de la aplicación: unitarios, integración con Docker, `-race`,
   cobertura y build de imagen.
+- Seguridad de servicio a servicio: emisión y validación de JWT con claves
+  asimétricas, algoritmo fijado, `iss`/`aud`/`exp` y pruebas de ataques comunes
+  (`alg=none`, confusión HS256/RS256).
+- Un segundo stack (Java 21 + Quarkus) desplegado con el mismo chart que la app Go.
 - Documentación orientada a que un tercero pueda reproducirlo.
 
 ## Probarlo
@@ -102,8 +130,9 @@ cambia algo, el *self-heal* lo revierte; si cambia Git, Argo CD lo aplica.
 ```bash
 git clone https://github.com/slashispy/kind-gitops-utility-belt
 git clone https://github.com/slashispy/quicktask
+git clone https://github.com/slashispy/quicktask-auth ~/Developer/java/proyectos/quicktask-auth
 cd kind-gitops-utility-belt
-make bootstrap     # up + argocd + image + apps
+make bootstrap     # up + argocd + image + keys + apps
 make status
 ```
 

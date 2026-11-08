@@ -3,13 +3,14 @@
 Herramientas de bootstrap para levantar el circuito **QuickTask GitOps** completo
 en local sobre [KIND](https://kind.sigs.k8s.io/) (Kubernetes IN Docker) con
 **Argo CD**. Este repo es el *tooling* del circuito: crea el cluster, instala
-Argo CD, carga la imagen de la app y arranca el modelo App of Apps.
+Argo CD, carga las imágenes de las apps, genera las claves JWT y arranca el modelo App of Apps.
 
-Es una de las cinco piezas del circuito:
+Es una de las seis piezas del circuito:
 
 | Repo | Rol |
 |---|---|
-| [`quicktask`](https://github.com/slashispy/quicktask) | Aplicación (API Go + MongoDB, JWT). |
+| [`quicktask`](https://github.com/slashispy/quicktask) | Aplicación (API Go + MongoDB), valida JWT. |
+| [`quicktask-auth`](https://github.com/slashispy/quicktask-auth) | Emisor de JWT (Quarkus, client credentials, RS256). |
 | [`helm-chart-generic-app`](https://github.com/slashispy/helm-chart-generic-app) | Helm chart genérico y reutilizable. |
 | [`gitops-app-values`](https://github.com/slashispy/gitops-app-values) | Values por app que parametrizan el chart. |
 | [`gitops-argocd-apps`](https://github.com/slashispy/gitops-argocd-apps) | App of Apps + ApplicationSet de Argo CD. |
@@ -24,15 +25,32 @@ Es una de las cinco piezas del circuito:
 ```
  make up       ─▶ crea cluster KIND (kind/kind-config.yaml)
  make argocd   ─▶ instala Argo CD (manifiestos oficiales) y espera readiness
- make image    ─▶ docker build quicktask:dev  +  kind load docker-image
+ make image    ─▶ docker build quicktask:dev y quicktask-auth:dev  +  kind load
+ make keys     ─▶ par RSA + cliente demo -> Secrets del cluster (NO van a Git)
  make apps     ─▶ aplica SOLO app-of-apps.yaml (App of Apps)
                         │
                         ▼
       Argo CD reconcilia desde Git:
         root ─▶ AppProject(quicktask) + ApplicationSet
-             ─▶ Application(quicktask) = chart genérico + values
-             ─▶ Deployment + Service + ConfigMap + Secret + MongoDB (StatefulSet)
+             ─▶ Application(quicktask)      = chart genérico + values
+             ─▶ Application(quicktask-auth) = chart genérico + values
+             ─▶ Deployment + Service + ConfigMap + Secret (+ MongoDB para quicktask)
 ```
+
+### Flujo de autenticación
+
+`quicktask-auth` (Quarkus) emite JWT RS256 por *client credentials*; `quicktask`
+los valida con la **clave pública**. La clave privada solo la ve `quicktask-auth`.
+
+```
+ cliente ── client_id + client_secret ──▶ quicktask-auth ── JWT (firma con clave PRIVADA)
+ cliente ── Authorization: Bearer JWT ──▶ quicktask       (valida con clave PÚBLICA)
+```
+
+`make keys` crea tres Secrets en el namespace `quicktask`
+(`quicktask-auth-keys`, `quicktask-jwt-public`, `quicktask-auth-demo-client`).
+Son los únicos datos sensibles del circuito y **no se versionan**: los values
+de Git solo referencian los Secrets por nombre.
 
 La imagen se inyecta en KIND con `kind load` (sin registry). El chart usa
 `pullPolicy: IfNotPresent` y el tag fijo `dev`, de modo que el cluster usa esa
@@ -61,14 +79,27 @@ make bootstrap
 make status
 ```
 
-`make bootstrap` encadena `up → argocd → image → apps`. Cuando la Application
-`quicktask` aparezca **Synced / Healthy**, la app está desplegada.
+`make bootstrap` encadena `up → argocd → image → keys → apps`. Cuando las
+Applications `quicktask` y `quicktask-auth` aparezcan **Synced / Healthy**, el
+circuito está desplegado.
 
 ### Acceder a la app
 
 ```bash
 kubectl -n quicktask port-forward svc/quicktask 9090:8080
 curl -fsS http://localhost:9090/health   # -> {"status":"ok"}
+```
+
+### Obtener un token y llamar a la API protegida
+
+```bash
+kubectl -n quicktask port-forward svc/quicktask-auth 9092:8080 &   # emisor de JWT
+TOKEN=$(scripts/token.sh)                                           # cliente "demo"
+
+curl -i -X POST http://localhost:9090/v1/users \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name":"Ada","email":"ada@example.com","password":"supersecret123"}'
+# HTTP/1.1 201 Created   (sin token o con token adulterado: 401)
 ```
 
 ### Acceder a la UI de Argo CD
@@ -99,13 +130,16 @@ Si prefieres entender cada paso o no usar `make`:
 # 2) Instalar Argo CD y esperar a que esté listo
 ./scripts/01-install-argocd.sh
 
-# 3) Construir la imagen de quicktask y cargarla en KIND
+# 3) Construir las imágenes (quicktask y quicktask-auth) y cargarlas en KIND
 ./scripts/02-build-and-load-image.sh
 
-# 4) Aplicar la App of Apps (único manifiesto aplicado a mano)
+# 4) Generar las claves JWT y el cliente demo (Secrets, fuera de Git)
+./scripts/04-generate-jwt-keys.sh
+
+# 5) Aplicar la App of Apps (único manifiesto aplicado a mano)
 ./scripts/03-bootstrap-apps.sh
 
-# 5) Observar
+# 6) Observar
 kubectl -n argocd get applications
 kubectl -n quicktask get pods -w
 ```
@@ -116,9 +150,10 @@ kubectl -n quicktask get pods -w
 |---|---|
 | `make up` | Crea el cluster KIND. |
 | `make argocd` | Instala Argo CD y espera readiness. |
-| `make image` | Build de `quicktask:dev` + `kind load`. |
+| `make image` | Build de `quicktask:dev` y `quicktask-auth:dev` + `kind load`. |
+| `make keys` | Crea los Secrets JWT (par RSA + cliente demo). Idempotente; `FORCE=1` regenera. |
 | `make apps` | Aplica la App of Apps. |
-| `make bootstrap` | `up + argocd + image + apps`. |
+| `make bootstrap` | `up + argocd + image + keys + apps`. |
 | `make status` | Applications, pods y servicios + comandos de port-forward. |
 | `make down` | Elimina el cluster KIND. |
 
@@ -132,6 +167,8 @@ Los scripts leen estas variables (con valores por defecto en `scripts/lib.sh`):
 | `ARGOCD_VERSION` | `stable` | Tag/branch de `argo-cd/install.yaml`. |
 | `IMAGE_NAME` / `IMAGE_TAG` | `quicktask` / `dev` | Imagen de la app. |
 | `QUICKTASK_DIR` | `~/Developer/go/proyectos/quicktask` | Ruta local del repo de la app (para `docker build`). |
+| `QUICKTASK_AUTH_DIR` | `~/Developer/java/proyectos/quicktask-auth` | Ruta local del repo del emisor de JWT. |
+| `AUTH_IMAGE_NAME` | `quicktask-auth` | Imagen del emisor de JWT (mismo `IMAGE_TAG`). |
 | `ARGOCD_APPS_REPO` | `https://github.com/slashispy/gitops-argocd-apps` | Repo de la App of Apps. |
 | `ARGOCD_APPS_REF` | `main` | Revisión del repo de Argo CD apps. |
 | `APP_NAMESPACE` | `quicktask` | Namespace de la app. |
@@ -156,6 +193,8 @@ kind-gitops-utility-belt/
 │   ├── 01-install-argocd.sh
 │   ├── 02-build-and-load-image.sh
 │   ├── 03-bootstrap-apps.sh
+│   ├── 04-generate-jwt-keys.sh   # Secrets JWT (par RSA + cliente demo)
+│   ├── token.sh                  # pide un JWT al cliente demo
 │   ├── status.sh
 │   └── 99-teardown.sh
 ├── ci/
@@ -172,8 +211,12 @@ kind-gitops-utility-belt/
   resuelto en el script (usa `kubectl apply --server-side`).
 - **`address already in use` en `port-forward`**: 8080/8081 los reserva KIND;
   usa 9090 (app) y 9091 (Argo CD).
-- **`quicktask` queda en `ImagePullBackOff`**: la imagen no está en el cluster.
+- **`quicktask` o `quicktask-auth` en `ImagePullBackOff`**: la imagen no está en el cluster.
   Re-ejecuta `make image` (build + `kind load`) y comprueba el tag `dev`.
+- **Pods en `ContainerCreating` (`secret ... not found`)**: faltan los Secrets JWT.
+  Ejecuta `make keys`.
+- **`401` con un token recién emitido**: las claves se regeneraron (`FORCE=1`) sin
+  reiniciar `quicktask`. Haz `kubectl -n quicktask rollout restart deploy quicktask quicktask-auth`.
 - **La Application no aparece**: revisa que el `ApplicationSet` esté creado
   (`kubectl -n argocd get applicationsets`) y que el repo `gitops-app-values`
   sea accesible (es público).

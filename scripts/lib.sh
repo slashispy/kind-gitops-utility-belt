@@ -20,6 +20,11 @@ export IMAGE_REF="${IMAGE_NAME}:${IMAGE_TAG}"
 # Ruta local del repo de la app (para `docker build`). Ajustable por entorno.
 export QUICKTASK_DIR="${QUICKTASK_DIR:-$HOME/Developer/go/proyectos/quicktask}"
 
+# Servicio emisor de JWT (Quarkus): imagen y ruta local de su repo.
+export AUTH_IMAGE_NAME="${AUTH_IMAGE_NAME:-quicktask-auth}"
+export AUTH_IMAGE_REF="${AUTH_IMAGE_NAME}:${IMAGE_TAG}"
+export QUICKTASK_AUTH_DIR="${QUICKTASK_AUTH_DIR:-$HOME/Developer/java/proyectos/quicktask-auth}"
+
 # Repo de manifiestos de Argo CD (App of Apps). Se aplica a mano app-of-apps.yaml.
 export ARGOCD_APPS_REPO="${ARGOCD_APPS_REPO:-https://github.com/slashispy/gitops-argocd-apps}"
 export ARGOCD_APPS_REF="${ARGOCD_APPS_REF:-main}"
