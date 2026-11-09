@@ -23,9 +23,9 @@ Es una de las seis piezas del circuito:
 ## Cómo funciona
 
 ```
- make up       ─▶ crea cluster KIND (kind/kind-config.yaml)
+ make up       ─▶ crea cluster KIND (kind/kind-config.yaml) + registry local localhost:5001
  make argocd   ─▶ instala Argo CD (manifiestos oficiales) y espera readiness
- make image    ─▶ docker build quicktask:dev y quicktask-auth:dev  +  kind load
+ make image    ─▶ docker build + docker push localhost:5001/{quicktask,quicktask-auth}:dev
  make keys     ─▶ par RSA + cliente demo -> Secrets del cluster (NO van a Git)
  make apps     ─▶ aplica SOLO app-of-apps.yaml (App of Apps)
                         │
@@ -52,10 +52,14 @@ los valida con la **clave pública**. La clave privada solo la ve `quicktask-aut
 Son los únicos datos sensibles del circuito y **no se versionan**: los values
 de Git solo referencian los Secrets por nombre.
 
-La imagen se inyecta en KIND con `kind load` (sin registry). El chart usa
-`pullPolicy: IfNotPresent` y el tag fijo `dev`, de modo que el cluster usa esa
-imagen local. La evolución a un registry real está descrita en
-[`ci/pipeline.md`](ci/pipeline.md).
+Las imágenes se publican en un **registry local** (contenedor `kind-registry`,
+`registry:2`) conectado a la red `kind`. Desde el host es `localhost:5001`; los
+nodos resuelven `localhost:5001` hacia `kind-registry:5000` mediante
+`/etc/containerd/certs.d/localhost:5001/hosts.toml` (lo escribe
+`00-create-cluster.sh`, junto con `containerdConfigPatches` en
+`kind/kind-config.yaml`). Los values referencian `localhost:5001/<app>:<tag>`.
+`make image` publica el tag `dev` de arranque en frío; luego el CI (Tekton)
+publicará tags inmutables por SHA. Ver [`ci/pipeline.md`](ci/pipeline.md).
 
 ## Requisitos
 
@@ -130,8 +134,8 @@ Si prefieres entender cada paso o no usar `make`:
 # 2) Instalar Argo CD y esperar a que esté listo
 ./scripts/01-install-argocd.sh
 
-# 3) Construir las imágenes (quicktask y quicktask-auth) y cargarlas en KIND
-./scripts/02-build-and-load-image.sh
+# 3) Construir las imágenes (quicktask y quicktask-auth) y publicarlas en localhost:5001
+./scripts/02-build-and-push-image.sh
 
 # 4) Generar las claves JWT y el cliente demo (Secrets, fuera de Git)
 ./scripts/04-generate-jwt-keys.sh
@@ -148,9 +152,9 @@ kubectl -n quicktask get pods -w
 
 | Target | Acción |
 |---|---|
-| `make up` | Crea el cluster KIND. |
+| `make up` | Crea el cluster KIND y el registry local (`localhost:5001`). |
 | `make argocd` | Instala Argo CD y espera readiness. |
-| `make image` | Build de `quicktask:dev` y `quicktask-auth:dev` + `kind load`. |
+| `make image` | Build de `quicktask` y `quicktask-auth` (`:dev`) + `docker push` a `localhost:5001`. |
 | `make keys` | Crea los Secrets JWT (par RSA + cliente demo). Idempotente; `FORCE=1` regenera. |
 | `make apps` | Aplica la App of Apps. |
 | `make bootstrap` | `up + argocd + image + keys + apps`. |
@@ -191,7 +195,7 @@ kind-gitops-utility-belt/
 │   ├── lib.sh                    # config + helpers compartidos
 │   ├── 00-create-cluster.sh
 │   ├── 01-install-argocd.sh
-│   ├── 02-build-and-load-image.sh
+│   ├── 02-build-and-push-image.sh
 │   ├── 03-bootstrap-apps.sh
 │   ├── 04-generate-jwt-keys.sh   # Secrets JWT (par RSA + cliente demo)
 │   ├── token.sh                  # pide un JWT al cliente demo
@@ -211,8 +215,10 @@ kind-gitops-utility-belt/
   resuelto en el script (usa `kubectl apply --server-side`).
 - **`address already in use` en `port-forward`**: 8080/8081 los reserva KIND;
   usa 9090 (app) y 9091 (Argo CD).
-- **`quicktask` o `quicktask-auth` en `ImagePullBackOff`**: la imagen no está en el cluster.
-  Re-ejecuta `make image` (build + `kind load`) y comprueba el tag `dev`.
+- **`quicktask` o `quicktask-auth` en `ImagePullBackOff`**: la imagen no está en el registry.
+  Comprueba `curl localhost:5001/v2/_catalog` y re-ejecuta `make image`. Si el
+  registry no existe o los nodos no lo resuelven, recrea con `make down && make up`
+  (el `containerdConfigPatches` solo se aplica al crear el cluster).
 - **Pods en `ContainerCreating` (`secret ... not found`)**: faltan los Secrets JWT.
   Ejecuta `make keys`.
 - **`401` con un token recién emitido**: las claves se regeneraron (`FORCE=1`) sin

@@ -73,7 +73,7 @@ responsabilidades):
 
 1. **`make up`**: crea el cluster KIND.
 2. **`make argocd`**: instala Argo CD con server-side apply.
-3. **`make image`**: construye `quicktask:dev` y `quicktask-auth:dev` y las carga en el nodo (`kind load`).
+3. **`make image`**: construye `quicktask` y `quicktask-auth` (`:dev`) y las publica en el registry local `localhost:5001`.
 4. **`make keys`**: genera el par RSA y el cliente de demo como Secrets del cluster.
 5. **`make apps`**: aplica *un solo manifiesto*, la Application `root`.
 6. Desde ahí **Argo CD lo reconcilia todo desde Git**: proyecto, ApplicationSet,
@@ -94,9 +94,9 @@ cambia algo, el *self-heal* lo revierte; si cambia Git, Argo CD lo aplica.
   manifiestos de Argo CD.
 - **App of Apps como único punto de entrada.** Un solo `kubectl apply` arranca
   todo; el resto es declarativo.
-- **Imagen local sin registry.** `kind load` + `pullPolicy: IfNotPresent` + tag
-  `dev` mantienen la demo autocontenida. La evolución a GHCR con tags inmutables
-  está en [`ci/pipeline.md`](https://github.com/slashispy/kind-gitops-utility-belt/blob/main/ci/pipeline.md).
+- **Registry local.** Un contenedor `registry:2` en la red de KIND (`localhost:5001`)
+  mantiene la demo autocontenida y permite que el CI publique tags inmutables por SHA.
+  Evolución a GHCR en [`ci/pipeline.md`](https://github.com/slashispy/kind-gitops-utility-belt/blob/main/ci/pipeline.md).
 - **Readiness real.** `/ready` hace ping a MongoDB; `/health` solo indica que el
   proceso vive. Cada probe usa el endpoint adecuado.
 - **Una app nueva = una carpeta.** `quicktask-auth` entró al circuito añadiendo

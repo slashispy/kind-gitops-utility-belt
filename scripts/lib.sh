@@ -12,17 +12,22 @@ export CLUSTER_NAME="${CLUSTER_NAME:-quicktask-gitops}"
 export ARGOCD_NAMESPACE="${ARGOCD_NAMESPACE:-argocd}"
 export ARGOCD_VERSION="${ARGOCD_VERSION:-stable}"   # tag/branch de argo-cd/install.yaml
 
+# Registry local: contenedor en la red `kind`. Host: localhost:5001; cluster: kind-registry:5000.
+export REGISTRY_NAME="${REGISTRY_NAME:-kind-registry}"
+export REGISTRY_PORT="${REGISTRY_PORT:-5001}"
+export REGISTRY_HOST="localhost:${REGISTRY_PORT}"
+
 # Imagen de la app.
 export IMAGE_NAME="${IMAGE_NAME:-quicktask}"
 export IMAGE_TAG="${IMAGE_TAG:-dev}"
-export IMAGE_REF="${IMAGE_NAME}:${IMAGE_TAG}"
+export IMAGE_REF="${REGISTRY_HOST}/${IMAGE_NAME}:${IMAGE_TAG}"
 
 # Ruta local del repo de la app (para `docker build`). Ajustable por entorno.
 export QUICKTASK_DIR="${QUICKTASK_DIR:-$HOME/Developer/go/proyectos/quicktask}"
 
 # Servicio emisor de JWT (Quarkus): imagen y ruta local de su repo.
 export AUTH_IMAGE_NAME="${AUTH_IMAGE_NAME:-quicktask-auth}"
-export AUTH_IMAGE_REF="${AUTH_IMAGE_NAME}:${IMAGE_TAG}"
+export AUTH_IMAGE_REF="${REGISTRY_HOST}/${AUTH_IMAGE_NAME}:${IMAGE_TAG}"
 export QUICKTASK_AUTH_DIR="${QUICKTASK_AUTH_DIR:-$HOME/Developer/java/proyectos/quicktask-auth}"
 
 # Repo de manifiestos de Argo CD (App of Apps). Se aplica a mano app-of-apps.yaml.

@@ -36,5 +36,5 @@ cat <<EOF
     kubectl -n ${ARGOCD_NAMESPACE} port-forward svc/argocd-server 9091:443
     # abrir https://localhost:9091  (usuario: admin)
 
-Siguiente paso: scripts/02-build-and-load-image.sh
+Siguiente paso: scripts/02-build-and-push-image.sh
 EOF

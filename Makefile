@@ -21,14 +21,14 @@ help: ## Muestra esta ayuda
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 	  | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-up: ## Crea el cluster KIND
+up: ## Crea el cluster KIND y el registry local
 	$(SCRIPTS)/00-create-cluster.sh
 
 argocd: ## Instala Argo CD y espera readiness
 	$(SCRIPTS)/01-install-argocd.sh
 
-image: ## Construye quicktask:dev y quicktask-auth:dev y las carga en KIND
-	$(SCRIPTS)/02-build-and-load-image.sh
+image: ## Construye quicktask y quicktask-auth (:dev) y las publica en localhost:5001
+	$(SCRIPTS)/02-build-and-push-image.sh
 
 keys: ## Crea los Secrets JWT (par RSA + cliente demo); no se versionan
 	$(SCRIPTS)/04-generate-jwt-keys.sh
@@ -42,5 +42,5 @@ bootstrap: up argocd image keys apps ## Circuito completo de cero (up+argocd+ima
 status: ## Muestra Applications, pods y servicios
 	$(SCRIPTS)/status.sh
 
-down: ## Elimina el cluster KIND (destruye todo el estado)
+down: ## Elimina el cluster KIND y el registry (destruye todo el estado)
 	$(SCRIPTS)/99-teardown.sh

@@ -1,21 +1,21 @@
-# Pipeline — del `kind load` a un circuito GitOps "real"
+# Pipeline — del registry local a un circuito GitOps "real"
 
-Este documento describe cómo evolucionar la demo (imagen local cargada con
-`kind load`) hacia un **circuito CI/CD real** con registry remoto, sin cambiar
+Este documento describe cómo evolucionar la demo (registry local en KIND) hacia un **circuito CI/CD real** con registry remoto, sin cambiar
 el modelo GitOps. Es el "paso siguiente" natural del portfolio.
 
-## Dónde estamos (demo en KIND)
+## Dónde estamos (demo en KIND con registry local)
 
 ```
- dev ── docker build quicktask:dev ──> kind load docker-image ──> cluster KIND
+ dev ── docker build/push ──> kind-registry (localhost:5001) ──> cluster KIND
                                                                       │
  Argo CD  ◀── reconcilia ── Git (chart + values + argo apps) ─────────┘
 ```
 
-- La imagen nunca sale de la máquina: `kind load` la inyecta en los nodos.
-- El tag es fijo (`dev`) y `pullPolicy: IfNotPresent`.
-- **Limitación**: no hay trazabilidad de qué commit produjo qué imagen, ni
-  promoción entre entornos.
+- La imagen se publica en un registry local conectado a la red de KIND
+  (`localhost:5001` en el host, `kind-registry:5000` en el cluster).
+- Arranque en frío con tag `dev`; el CI (Tekton, ver spec `quicktask-tekton-ci`)
+  publicará tags inmutables por SHA.
+- **Limitación**: el registry es local; no hay promoción entre entornos.
 
 ## Dónde queremos llegar (CI build + registry + GitOps CD)
 

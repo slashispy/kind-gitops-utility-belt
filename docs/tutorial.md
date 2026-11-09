@@ -166,10 +166,10 @@ make image
 make keys
 ```
 
-**`make image`** hace `docker build` de **dos imágenes** (`quicktask:dev`, Go, y
-`quicktask-auth:dev`, Quarkus) y las copia **dentro del nodo** con
-`kind load docker-image`. No hay registry: el chart usa `pullPolicy: IfNotPresent`
-y el tag fijo `dev`.
+**`make image`** hace `docker build` de **dos imágenes** (Go y Quarkus) y las publica con
+`docker push` en el **registry local** (`localhost:5001`, contenedor `kind-registry`).
+Los nodos lo resuelven por la configuración de containerd. Verifica con
+`curl localhost:5001/v2/_catalog`.
 
 ```bash
 docker exec quicktask-gitops-control-plane crictl images | grep quicktask
