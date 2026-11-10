@@ -72,8 +72,8 @@ renovables). No hay secretos estáticos que rotar, filtrar ni guardar en un repo
 
 ## Las dos piezas
 
-- **Infraestructura (Terraform):** Trust Anchor, rol IAM, política y Profile. Proyecto
-  `terraform/roles-anywhere` (provider AWS `~> 6.0`).
+- **Infraestructura (Terraform):** Trust Anchor, rol IAM, política y Profile. Repo
+  [`terraform-roles-anywhere`](https://github.com/slashispy/terraform-roles-anywhere) (provider AWS `~> 6.0`).
 - **Ejecución desde fuera de AWS (este repo):** [`scripts/06-aws-roles-anywhere.sh`](https://github.com/slashispy/kind-gitops-utility-belt/blob/main/scripts/06-aws-roles-anywhere.sh).
 
 ```bash
