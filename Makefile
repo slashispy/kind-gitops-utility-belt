@@ -15,7 +15,7 @@ SCRIPTS := ./scripts
 
 .DEFAULT_GOAL := help
 
-.PHONY: help up argocd image keys apps bootstrap status down
+.PHONY: help up argocd image keys apps bootstrap status aws-ra down
 
 help: ## Muestra esta ayuda
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -41,6 +41,9 @@ bootstrap: up argocd image keys apps ## Circuito completo de cero (up+argocd+ima
 
 status: ## Muestra Applications, pods y servicios
 	$(SCRIPTS)/status.sh
+
+aws-ra: ## AWS CLI sin Access Keys vía IAM Roles Anywhere (make aws-ra ARGS="sts get-caller-identity")
+	$(SCRIPTS)/06-aws-roles-anywhere.sh $(ARGS)
 
 down: ## Elimina el cluster KIND y el registry (destruye todo el estado)
 	$(SCRIPTS)/99-teardown.sh

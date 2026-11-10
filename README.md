@@ -159,7 +159,23 @@ kubectl -n quicktask get pods -w
 | `make apps` | Aplica la App of Apps. |
 | `make bootstrap` | `up + argocd + image + keys + apps`. |
 | `make status` | Applications, pods y servicios + comandos de port-forward. |
+| `make aws-ra ARGS="..."` | Ejecuta AWS CLI desde fuera de AWS con IAM Roles Anywhere (sin Access Keys). Ver abajo. |
 | `make down` | Elimina el cluster KIND. |
+
+### AWS sin Access Keys (IAM Roles Anywhere)
+
+`scripts/06-aws-roles-anywhere.sh` ejecuta cualquier comando `aws` con credenciales
+temporales de STS obtenidas con un certificado X.509 (`aws_signing_helper`), sin
+guardar Access Keys. La infraestructura (trust anchor, rol de mínimo privilegio,
+profile) está en el proyecto Terraform `~/Developer/terraform/roles-anywhere`.
+
+```bash
+make aws-ra ARGS="sts get-caller-identity"
+make aws-ra ARGS="s3 cp ./backup.tar.gz s3://mi-bucket/backups/"
+```
+
+Requiere `aws` CLI v2 y [`aws_signing_helper`](https://docs.aws.amazon.com/rolesanywhere/latest/userguide/credential-helper.html).
+Variables: `RA_TF_DIR`, `RA_CERT`, `RA_KEY` (y `RA_*_ARN` / `AWS_REGION`, que por defecto se leen de `terraform output`).
 
 ## Configuración (variables de entorno)
 
@@ -198,6 +214,7 @@ kind-gitops-utility-belt/
 │   ├── 02-build-and-push-image.sh
 │   ├── 03-bootstrap-apps.sh
 │   ├── 04-generate-jwt-keys.sh   # Secrets JWT (par RSA + cliente demo)
+│   ├── 06-aws-roles-anywhere.sh  # AWS CLI sin Access Keys (IAM Roles Anywhere)
 │   ├── token.sh                  # pide un JWT al cliente demo
 │   ├── status.sh
 │   └── 99-teardown.sh
